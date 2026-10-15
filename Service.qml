@@ -338,6 +338,12 @@ Item {
         root.scheduleRegister()
       } else if (!root.shown) {
         return
+      } else if (name === "workspacev2" || name === "focusedmonv2") {
+        // Another desktop came on screen: the stage turns to it at once
+        // (Overview, "sliding desktops") rather than after the pause the
+        // other events wait out.
+        followTimer.stop()
+        root.refresh(null)
       } else if (root.followedEvents.indexOf(name) >= 0) {
         followTimer.restart()
       }

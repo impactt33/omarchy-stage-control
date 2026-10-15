@@ -178,6 +178,8 @@ PanelWindow {
     spacesBar.cancelDesktopDrag()
     // Where windows were on the last opening's screen capture: not this one's.
     if (!showsHere) ghostRects = ({})
+    // A new opening starts on its desktop; it doesn't slide there.
+    if (!showsHere) endSlide()
     rebuild()
     // Shown on a stage that is already open (App Exposé on another display
     // turned into the stage): its capture is being taken now.
@@ -236,6 +238,7 @@ PanelWindow {
     var monitor = stageHere()
     var settings = service.settings || {}
     if (!monitor) {
+      slideFromDesktop = 0
       setModel("tileIds", [])
       setModel("tileData", {})
       setModel("groups", [])
@@ -338,6 +341,20 @@ PanelWindow {
       })
     })
 
+    // The desktop on screen changed while the stage is open: slide to it.
+    var active = monitor.activeWorkspace
+    if (mission && slideFromDesktop !== 0 && active !== slideFromDesktop && slideAllowed())
+      beginSlide(slideFromDesktop, active, width, data)
+    slideFromDesktop = mission ? active : 0
+    // Windows still sliding out stay on the stage until they're gone; only
+    // where they'll be, not where they are now, so none of them can be
+    // picked from the keyboard.
+    for (var leavingAddress in leavingData) {
+      if (data[leavingAddress]) continue
+      data[leavingAddress] = leavingData[leavingAddress]
+      ids.push(leavingAddress)
+    }
+
     setModel("groups", result.groups.map(function(group) {
       var app = service.appFor(group.key)
       return { key: group.key, x: group.x, y: group.y, w: group.w, h: group.h, icon: app.icon, name: app.name }
@@ -346,8 +363,125 @@ PanelWindow {
     setModel("tileIds", ids)
     setModel("placed", rects)
     setModel("minimizedIds", minIds)
-    if (selectedAddress && !data[selectedAddress]) selectedAddress = ""
-    if (hoverAddress && !data[hoverAddress]) hoverAddress = ""
+    startSlideIns()
+    if (selectedAddress && (!data[selectedAddress] || data[selectedAddress].leaving)) selectedAddress = ""
+    if (hoverAddress && (!data[hoverAddress] || data[hoverAddress].leaving)) hoverAddress = ""
+  }
+
+  // ---- sliding desktops ------------------------------------------------------------
+  //
+  // Going to another desktop while the stage is open (Ctrl+←/→, Super+3, a
+  // swipe, the top bar's workspaces) turns the page, like macOS: the
+  // desktop that was on screen slides out to one side, its windows with it,
+  // and the new one's windows come in from the other, toward the desktop's
+  // place in the Spaces bar. Without this the old windows simply vanished
+  // and the new ones appeared in their place.
+  //
+  // The tiles that leave stay on the stage, out of the keyboard's and the
+  // pointer's way, until they're gone (leavingData, merged in by rebuild()).
+
+  // The desktop the stage showed at its last layout; 0 when it isn't up.
+  property int slideFromDesktop: 0
+  property var leavingData: ({})
+  // Tiles still to start sliding in, by address: where they start from.
+  property var pendingSlideIns: ({})
+  // App names under grouped windows ride in with them.
+  property real groupSlideX: 0
+  readonly property int slideDuration: Math.round(440 / (service ? service.speedFactor : 1))
+
+  // Only on a stage that is open and still: not while it opens or closes,
+  // follows the fingers, or with reduced motion (which fades everything).
+  function slideAllowed() {
+    return !!service && service.revealed && !service.closing && !service.tracking && service.progress >= 0.99
+      && !(service.settings && service.settings.reduceMotion)
+  }
+
+  function beginSlide(fromDesktop, toDesktop, distance, newData) {
+    // Toward a desktop to the right, everything moves left, and back.
+    var order = service.desktopsFor(screenName).map(function(desktop) { return desktop.id })
+    var a = order.indexOf(fromDesktop), b = order.indexOf(toDesktop)
+    var direction = (a >= 0 && b >= 0 ? b - a : toDesktop - fromDesktop) > 0 ? 1 : -1
+    var shift = distance + 40
+
+    // Out: every window on the stage that isn't on the new desktop. One
+    // already on its way out keeps going where it was going: sent the
+    // other way, it would cross the whole screen.
+    var leaving = {}
+    tileIds.forEach(function(address) {
+      var info = tileData[address]
+      if (!info || info.minimized || newData[address]) return
+      if (leavingData[address]) {
+        leaving[address] = leavingData[address]
+        return
+      }
+      var copy = JSON.parse(JSON.stringify(info))
+      copy.leaving = true
+      leaving[address] = copy
+      var tile = tileItems[address]
+      if (tile) tile.slideTo(-direction * shift, slideDuration)
+    })
+    // In: the new desktop's windows that weren't on the stage, or were on
+    // their way out (switching back mid-slide turns them around).
+    var pending = {}
+    Object.keys(newData).forEach(function(address) {
+      if (tileData[address] && !leavingData[address]) return
+      pending[address] = direction * shift
+    })
+    leavingData = leaving
+    pendingSlideIns = pending
+    hoverAddress = ""
+    selectedAddress = ""
+    groupSlideAnimation.stop()
+    groupSlideX = direction * shift
+    groupSlideAnimation.duration = slideDuration
+    groupSlideAnimation.start()
+    slideEndTimer.interval = slideDuration + 60
+    slideEndTimer.restart()
+  }
+
+  // After the new tiles exist: each starts its way in. One coming back
+  // from its way out turns around where it is.
+  function startSlideIns() {
+    for (var address in pendingSlideIns) {
+      var tile = tileItems[address]
+      if (!tile) continue
+      tile.slideIn(pendingSlideIns[address], slideDuration)
+      delete pendingSlideIns[address]
+    }
+  }
+
+  // For a tile made after startSlideIns(): where it starts, if it slides in.
+  function takeSlideIn(address) {
+    if (pendingSlideIns[address] === undefined) return undefined
+    var offset = pendingSlideIns[address]
+    delete pendingSlideIns[address]
+    return offset
+  }
+
+  function endSlide() {
+    slideFromDesktop = 0
+    slideEndTimer.stop()
+    groupSlideAnimation.stop()
+    groupSlideX = 0
+    leavingData = ({})
+    pendingSlideIns = ({})
+  }
+
+  NumberAnimation {
+    id: groupSlideAnimation
+    target: win
+    property: "groupSlideX"
+    to: 0
+    easing.type: Easing.OutCubic
+  }
+
+  Timer {
+    id: slideEndTimer
+    onTriggered: {
+      win.leavingData = ({})
+      win.pendingSlideIns = ({})
+      win.rebuild()
+    }
   }
 
   // ---- tiles ------------------------------------------------------------------------
@@ -765,6 +899,7 @@ PanelWindow {
         model: win.grouped ? win.groups : []
         delegate: Row {
           required property var modelData
+          transform: Translate { x: win.groupSlideX }
           spacing: 8
           x: modelData.x + (modelData.w - width) / 2
           y: modelData.y + modelData.h + 12

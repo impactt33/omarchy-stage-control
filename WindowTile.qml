@@ -104,12 +104,50 @@ Item {
     }
   }
 
+  // Switching desktops on the open stage (Overview, "sliding desktops"):
+  // the window slides out with the desktop it's on, or in with the new one.
+  // A shift on top of where it is, so the slide leaves its place, its
+  // hover zoom and its layout animations alone.
+  readonly property bool leaving: !!info && info.leaving === true
+  property real slideX: 0
+  transform: Translate { x: tile.slideX }
+  NumberAnimation {
+    id: slideAnimation
+    target: tile
+    property: "slideX"
+    easing.type: Easing.OutCubic
+  }
+
+  function slideTo(target, duration) {
+    slideAnimation.stop()
+    slideAnimation.from = slideX
+    slideAnimation.to = target
+    slideAnimation.duration = duration
+    slideAnimation.start()
+  }
+
+  // In from `offset`, or, for a window already off its place (on its way
+  // out), from where it is.
+  function slideIn(offset, duration) {
+    if (!slideAnimation.running && Math.abs(slideX) < 0.5) slideX = offset
+    slideTo(0, duration)
+  }
+
+  Component.onCompleted: {
+    if (!overview) return
+    overview.registerTile(modelData, tile)
+    var offset = overview.takeSlideIn(modelData)
+    if (offset !== undefined) slideIn(offset, overview.slideDuration)
+  }
+
   // Tiles outlive a closed stage (Overview.rebuild()): the next opening
   // starts them afresh.
   Connections {
     target: tile.overview
     function onShowsHereChanged() {
       if (tile.overview.showsHere) return
+      slideAnimation.stop()
+      tile.slideX = 0
       dropAnimation.stop()
       tile.dropping = false
       closeTimeout.stop()
@@ -282,7 +320,7 @@ Item {
   MouseArea {
     id: mouse
     anchors.fill: frame
-    enabled: !!tile.service && tile.service.interactive && !tile.dropping
+    enabled: !!tile.service && tile.service.interactive && !tile.dropping && !tile.leaving
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton
     cursorShape: tile.dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor
@@ -397,6 +435,5 @@ Item {
     }
   }
 
-  Component.onCompleted: if (overview) overview.registerTile(modelData, tile)
   Component.onDestruction: if (overview) overview.unregisterTile(modelData, tile)
 }
