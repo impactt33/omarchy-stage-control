@@ -132,8 +132,13 @@ let passed = 0;
 {
   assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|toggle")), { type: "command", command: "toggle" });
   assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|g|update|0.00|-12.50|1016.00|5")),
-    { type: "gesture", phase: "update", dx: 0, dy: -12.5, time: 1016, fingers: 5 });
-  assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|g|finish|1|99.00")), { type: "gesture", phase: "finish", cancelled: true, time: 99 });
+    { type: "gesture", axis: "y", phase: "update", dx: 0, dy: -12.5, time: 1016, fingers: 5 });
+  assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|g|finish|1|99.00")), { type: "gesture", axis: "y", phase: "finish", cancelled: true, time: 99 });
+  // The desktop swipe on the open stage.
+  assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|h|start|-7.25|0.50|2000.00|3")),
+    { type: "gesture", axis: "x", phase: "start", dx: -7.25, dy: 0.5, time: 2000, fingers: 3 });
+  assert.deepEqual(plain(Settings.parseEvent("marcho78.stage-control|h|finish|0|2100.00")), { type: "gesture", axis: "x", phase: "finish", cancelled: false, time: 2100 });
+  assert.equal(Settings.parseEvent("marcho78.stage-control|h|explode"), null);
   for (const other of ["someone-else|toggle", "marcho78.stage-control|exec|rm", "marcho78.stage-control|g|explode", "", null, "marcho78.stage-control|toggle" + "|".repeat(200)]) {
     assert.equal(Settings.parseEvent(other), null, String(other));
   }
@@ -160,6 +165,16 @@ let passed = 0;
     spec.action.start({ delta = { x = 0, y = -3 }, time_ms = 10, fingers = 4 })
     spec.action.update({ delta = { x = 1, y = -40.25 }, time_ms = 26, fingers = 4 })
     spec.action.finish({ cancelled = false, time_ms = 42 })
+    -- The desktop swipe: Hyprland's own until the stage opens, then the
+    -- stage's, then Hyprland's again.
+    lines[#lines + 1] = "desktop " .. tostring(fake.gesture(3, "horizontal").action)
+    local switch = load(${JSON.stringify(Settings.desktopSwipeSwitch("track"))})
+    lines[#lines + 1] = "switch " .. switch()
+    local desk = fake.gesture(3, "horizontal")
+    lines[#lines + 1] = "desktop " .. type(desk.action)
+    desk.action.update({ delta = { x = -12.5, y = 0.75 }, time_ms = 50, fingers = 3 })
+    lines[#lines + 1] = "switch " .. load(${JSON.stringify(Settings.desktopSwipeSwitch("workspace"))})()
+    lines[#lines + 1] = "desktop " .. tostring(fake.gesture(3, "horizontal").action)
     for _, event in ipairs(fake.events) do lines[#lines + 1] = "event " .. event end
     print(table.concat(lines, "\\n"))`;
   const out = execFileSync("lua", ["-e", script], { cwd: root, encoding: "utf8" }).trim().split("\n");
@@ -170,10 +185,15 @@ let passed = 0;
   assert.equal(binds.length, 7);
   const events = out.filter((l) => l.startsWith("event ")).map((l) => plain(Settings.parseEvent(l.slice(6))));
   assert.deepEqual(events, [
-    { type: "gesture", phase: "start", dx: 0, dy: -3, time: 10, fingers: 4 },
-    { type: "gesture", phase: "update", dx: 1, dy: -40.25, time: 26, fingers: 4 },
-    { type: "gesture", phase: "finish", cancelled: false, time: 42 },
+    { type: "gesture", axis: "y", phase: "start", dx: 0, dy: -3, time: 10, fingers: 4 },
+    { type: "gesture", axis: "y", phase: "update", dx: 1, dy: -40.25, time: 26, fingers: 4 },
+    { type: "gesture", axis: "y", phase: "finish", cancelled: false, time: 42 },
+    { type: "gesture", axis: "x", phase: "update", dx: -12.5, dy: 0.75, time: 50, fingers: 3 },
   ]);
+  assert.deepEqual(out.filter((l) => l.startsWith("desktop ") || l.startsWith("switch ")),
+    ["desktop workspace", "switch ok", "desktop table", "switch ok", "desktop workspace"]);
+  assert.equal(options.desktopMode, "workspace");
+  assert.equal(Settings.hyprOptions(settings, [], "track").desktopMode, "track");
   passed++;
 }
 

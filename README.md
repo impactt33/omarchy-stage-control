@@ -18,6 +18,12 @@ Close windows, or swipe down for just the current app's windows.
   window toward it) and it opens into live thumbnails. Or have it show the
   thumbnails right away, with or without names. However many desktops you
   have, the row scrolls (wheel or two fingers) once they no longer fit.
+* **Swipe between desktops on the stage.** With "Swipe between desktops" on,
+  the stage's desktops follow your fingers sideways and the next one comes in
+  beside, as Hyprland's own workspace swipe does; let go and it goes on or
+  comes back by the same rules (`workspace_swipe_cancel_ratio`,
+  `workspace_swipe_min_speed_to_force`). Any other switch while the stage is
+  open (Ctrl+←/→, Super+3, the top bar) slides there too.
 * **Organize desktops.** Drag a window onto a desktop to move it there, or onto
   **+** for a new desktop. Drag desktops to reorder them. Hover one and click
   **×** to remove it; its windows move to the desktop before it (after it, for
@@ -147,7 +153,7 @@ out of the bar, so your settings go with it.
 | `barIcon` | `true` | show Stage Control's icon in the top bar |
 | `gestureFingers` | `4` | `0` (off), `3`, `4`, `5` |
 | `appExposeGesture` | `true` | swipe down for App Exposé |
-| `desktopSwipeFingers` | `0` | `0` (off), `3`, `4`, `5`: swipe sideways between desktops |
+| `desktopSwipeFingers` | `0` | `0` (off), `3`, `4`, `5`: swipe sideways between desktops; on the open stage the desktops follow the fingers (take the same swipe out of your Hyprland config) |
 | `shortcuts` | `true` | keyboard shortcuts on or off |
 | `stageKey` | `SUPER + A` | any modifiers and a key, or empty |
 | `appWindowsKey` | `SUPER + ALT + A` | any modifiers and a key, or empty |

@@ -150,6 +150,27 @@ function decorFrom(parts) {
   return decor
 }
 
+// How Hyprland's own desktop swipe is set up (the gestures:workspace_swipe_*
+// options in the same batch), so the stage's follows the fingers the same
+// way: `distance` swipe units move a whole desktop, `invert` flips which way
+// is next, a swipe goes on past `cancelRatio` of a desktop, or when its
+// fingers moved at least `minSpeed` units an event on average. Hyprland's
+// defaults where an option is missing.
+function swipeFrom(parts) {
+  var swipe = { distance: 300, invert: true, cancelRatio: 0.5, minSpeed: 30 }
+  ;(parts || []).forEach(function(part) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return
+    if (part.option === "gestures:workspace_swipe_distance") swipe.distance = Math.max(20, Math.min(5000, int(part.int, 300)))
+    else if (part.option === "gestures:workspace_swipe_invert") swipe.invert = part.bool !== false && part.int !== 0
+    else if (part.option === "gestures:workspace_swipe_cancel_ratio") {
+      var ratio = Number(part.float)
+      swipe.cancelRatio = isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.5
+    }
+    else if (part.option === "gestures:workspace_swipe_min_speed_to_force") swipe.minSpeed = Math.max(0, Math.min(1000, int(part.int, 30)))
+  })
+  return swipe
+}
+
 function monitorByName(snap, name) {
   for (var i = 0; i < snap.monitors.length; i++) if (snap.monitors[i].name === name) return snap.monitors[i]
   return null
@@ -183,6 +204,15 @@ function visibleWindows(snap, monitor) {
     if (w.pinned) return true
     if (w.workspace === monitor.activeWorkspace) return true
     return monitor.specialWorkspace !== 0 && w.workspace === monitor.specialWorkspace
+  }).sort(function(a, b) { return a.focus - b.focus })
+}
+
+// The windows of desktop `id` on `monitor`, as visibleWindows() would give
+// them if it were on screen, without the ones pinned to every desktop.
+function desktopWindows(snap, monitor, id) {
+  if (!monitor) return []
+  return snap.windows.filter(function(w) {
+    return !w.hidden && !w.pinned && w.monitor === monitor.id && w.workspace === id
   }).sort(function(a, b) { return a.focus - b.focus })
 }
 

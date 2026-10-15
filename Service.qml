@@ -190,7 +190,7 @@ Item {
       }
       var checked = Settings.checkBinds(Settings.wantedBinds(root.settings), existing)
       root.takenBinds = checked.taken
-      var options = Settings.hyprOptions(root.settings, checked.free)
+      var options = Settings.hyprOptions(root.settings, checked.free, root.desktopSwipeMode)
       registerRun.start(["/usr/bin/hyprctl", "eval", Settings.hyprRegistration(root.pluginDir + "/hypr/stage.lua", options)])
     }
   }
@@ -205,9 +205,52 @@ Item {
       root.hyprStatus = ok && (text === "" || text === "ok") ? "ok" : (text.slice(0, 600) || "Hyprland didn't answer")
       if (root.hyprStatus !== "ok") console.warn("Stage Control: registering with Hyprland:", root.hyprStatus)
       root.registering = false
+      // Registered as the stage was then; it may have opened or closed since.
+      root.registeredSwipeMode = ok ? root.desktopSwipeMode : ""
       if (root.registerAgain) {
         root.registerAgain = false
         root.register()
+      } else {
+        root.switchDesktopSwipe()
+      }
+    }
+  }
+
+  // ---- the desktop swipe --------------------------------------------------------
+  //
+  // With "Swipe between desktops" on, the swipe is Hyprland's own workspace
+  // swipe while the stage is closed, and the stage's while it's open
+  // (hypr/stage.lua, setDesktopSwipe), so the stage's desktops follow the
+  // fingers instead of switching only once Hyprland is done.
+
+  readonly property string desktopSwipeMode: shown && mode === "mission" ? "track" : "workspace"
+  property string registeredSwipeMode: ""
+  onDesktopSwipeModeChanged: switchDesktopSwipe()
+
+  function switchDesktopSwipe() {
+    if (!hyprIntegration || !settings || [3, 4, 5].indexOf(settings.desktopSwipeFingers) < 0) return
+    if (registering || swipeRun.running) return   // picked up when they finish
+    if (registeredSwipeMode === desktopSwipeMode) return
+    var mode = desktopSwipeMode
+    swipeRun.mode = mode
+    swipeRun.start(["/usr/bin/hyprctl", "eval", Settings.desktopSwipeSwitch(mode)])
+  }
+
+  Run {
+    id: swipeRun
+    property string mode: ""
+    maxBytes: 4 * 1024
+    timeoutMs: 3000
+    onFinished: function(ok, output) {
+      var text = String(output || "").trim().replace(/^error:\s*/i, "")
+      if (ok && (text === "" || text === "ok")) {
+        root.registeredSwipeMode = mode
+        root.switchDesktopSwipe()
+      } else if (text.indexOf("not registered") >= 0) {
+        root.registeredSwipeMode = ""
+        root.scheduleRegister()   // a config reload cleared it
+      } else {
+        console.warn("Stage Control: switching the desktop swipe:", text)
       }
     }
   }
@@ -225,6 +268,7 @@ Item {
   property var snap: null
   property var layers: ({})
   property var decor: ({ border: 0, bar: 0, rounding: 0 })
+  property var swipeConfig: Model.swipeFrom([])
   property int snapVersion: 0
   property var snapWaiters: []
   property var laterWaiters: []
@@ -258,7 +302,9 @@ Item {
       }
     }
     var started = snapRun.start(["/usr/bin/hyprctl", "-j", "--batch",
-      "clients; monitors; workspaces; layers; getoption general:border_size; getoption plugin:hyprbars:bar_height; getoption decoration:rounding"])
+      "clients; monitors; workspaces; layers; getoption general:border_size; getoption plugin:hyprbars:bar_height; getoption decoration:rounding; "
+      + "getoption gestures:workspace_swipe_distance; getoption gestures:workspace_swipe_invert; "
+      + "getoption gestures:workspace_swipe_cancel_ratio; getoption gestures:workspace_swipe_min_speed_to_force"])
     if (started) runningRead = ++readsStarted
     else snapPending = true
     if (hasCallback) {
@@ -283,6 +329,7 @@ Item {
             var rest = parts.slice(3)
             root.layers = rest.length && rest[0] && !Array.isArray(rest[0]) && rest[0].option === undefined ? rest.shift() : ({})
             root.decor = Model.decorFrom(rest)
+            root.swipeConfig = Model.swipeFrom(rest)
             root.snap = Model.snapshot(parts[0], parts[1], parts[2])
             root.snapVersion++
             root.lastGoodRead = read
@@ -751,6 +798,7 @@ Item {
   }
 
   function finishClose() {
+    deskOverview = null
     progressAnim.stop()
     animating = false
     openSerial++
@@ -823,9 +871,15 @@ Item {
       return
     }
     // A second registration of the same gesture would send every step twice.
-    var key = [event.phase, event.time, event.dx, event.dy].join(":")
+    var key = [event.axis, event.phase, event.time, event.dx, event.dy].join(":")
     if (key === lastGestureKey) return
     lastGestureKey = key
+    if (event.axis === "x") {
+      if (event.phase === "start") deskSwipeStart(event)
+      else if (event.phase === "update") deskSwipeUpdate(event)
+      else deskSwipeFinish(event)
+      return
+    }
     if (event.phase === "start") gestureStart(event)
     else if (event.phase === "update") gestureUpdate(event)
     else gestureFinish(event)
@@ -955,6 +1009,64 @@ Item {
     } else {
       close({ velocity: perUnit })
     }
+  }
+
+  // ---- swiping between desktops on the open stage ------------------------------------------
+  //
+  // The swipe goes to the stage on the display it's focused on
+  // (Overview.beginPeek): its desktop moves with the fingers, the next or
+  // previous one comes in beside it, and letting go goes there or comes
+  // back, by Hyprland's own rules for its workspace swipe (swipeConfig).
+
+  property var deskOverview: null
+  property real deskTravel: 0         // swipe units, toward the next desktop
+  property int deskSteps: 0
+  property var deskTrail: []
+
+  function deskSwipeStart(event) {
+    deskOverview = null
+    deskTravel = 0
+    deskSteps = 0
+    deskTrail = []
+    if (!interactive || mode !== "mission" || !snap) return
+    var monitor = Model.focusedMonitor(snap)
+    var overview = monitor ? overviews[monitor.name] : null
+    if (!overview || !overview.beginPeek()) return
+    deskOverview = overview
+    deskSwipeUpdate(event)
+  }
+
+  function deskSwipeUpdate(event) {
+    if (!deskOverview) return
+    // Toward the next desktop, the way Hyprland counts it.
+    deskTravel += (swipeConfig.invert ? -1 : 1) * event.dx
+    deskSteps++
+    deskTrail = Gesture.extendTrail(deskTrail, event.time, Date.now(), deskTravel)
+  }
+
+  // Once a frame, like the stage's own swipe (Gesture.js).
+  FrameAnimation {
+    running: !!root.deskOverview
+    onTriggered: {
+      if (!root.deskOverview) return
+      root.deskOverview.peekTo(Gesture.shownTravel(root.deskTrail, Date.now()) / root.swipeConfig.distance)
+    }
+  }
+
+  function deskSwipeFinish(event) {
+    var overview = deskOverview
+    deskOverview = null
+    if (!overview) return
+    var pages = deskTravel / swipeConfig.distance
+    // Like Hyprland: fast enough on average goes on whatever the distance,
+    // else past the cancel ratio does.
+    var speed = deskSteps > 0 ? deskTravel / deskSteps : 0
+    var target = 0
+    if (!event.cancelled) {
+      if (Math.abs(speed) >= swipeConfig.minSpeed && swipeConfig.minSpeed > 0) target = speed > 0 ? 1 : -1
+      else if (Math.abs(pages) > swipeConfig.cancelRatio) target = pages > 0 ? 1 : -1
+    }
+    overview.endPeek(target)
   }
 
   // ---- hot corners and overlays ----------------------------------------------------------

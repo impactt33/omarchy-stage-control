@@ -5,6 +5,11 @@
 --
 --   return dofile("<plugin>/hypr/stage.lua")({ fingers = 4, desktopSwipe = 0, binds = { ... } })
 --
+-- and, while it runs, swaps what the desktop swipe does as the stage opens
+-- and closes (setDesktopSwipe below):
+--
+--   return rawget(_G, "__marcho78_stage_control").setDesktopSwipe("track")
+--
 -- It only registers input and two rules: a live trackpad gesture, keyboard
 -- shortcuts, an optional desktop swipe, a layer rule for Stage Control's own
 -- surfaces and a window rule that floats its settings window. The gesture and
@@ -43,15 +48,24 @@ local function whole(value, low, high)
   return value
 end
 
-local function forward(phase, event)
+-- kind: "g" for the stage's vertical swipe, "h" for the desktop swipe.
+local function forward(kind, phase, event)
   local time = number(type(event) == "table" and event.time_ms or 0)
   if phase == "finish" then
     local cancelled = type(event) == "table" and event.cancelled == true
-    send("g|finish|" .. (cancelled and "1" or "0") .. "|" .. time)
+    send(kind .. "|finish|" .. (cancelled and "1" or "0") .. "|" .. time)
   else
     local fingers = whole(type(event) == "table" and event.fingers or 0, 0, 9)
-    send("g|" .. phase .. "|" .. delta(event, "x") .. "|" .. delta(event, "y") .. "|" .. time .. "|" .. fingers)
+    send(kind .. "|" .. phase .. "|" .. delta(event, "x") .. "|" .. delta(event, "y") .. "|" .. time .. "|" .. fingers)
   end
+end
+
+local function tracking(kind)
+  return {
+    start = function(event) forward(kind, "start", event) end,
+    update = function(event) forward(kind, "update", event) end,
+    finish = function(event) forward(kind, "finish", event) end,
+  }
 end
 
 -- Remove everything a previous run registered in this Lua state. A config
@@ -93,15 +107,7 @@ return function(options)
   -- the service, which decides between the stage and App Exposé.
   local fingers = whole(options.fingers, 3, 5)
   if fingers > 0 then
-    local spec = {
-      fingers = fingers,
-      direction = "vertical",
-      action = {
-        start = function(event) forward("start", event) end,
-        update = function(event) forward("update", event) end,
-        finish = function(event) forward("finish", event) end,
-      },
-    }
+    local spec = { fingers = fingers, direction = "vertical", action = tracking("g") }
     local registered, err = pcall(hl.gesture, spec)
     if registered then
       state.gestures[#state.gestures + 1] = { fingers = fingers, direction = "vertical", action = "unset" }
@@ -110,14 +116,34 @@ return function(options)
     end
   end
 
-  -- Swiping between desktops is Hyprland's own workspace gesture.
+  -- Swiping between desktops is Hyprland's own workspace gesture while the
+  -- stage is closed. While it's open the swipe goes to the stage instead,
+  -- step by step like the stage's own, so the stage's desktops follow the
+  -- fingers ("track"); the service swaps the two as the stage opens and
+  -- closes, with setDesktopSwipe.
   local swipe = whole(options.desktopSwipe, 3, 5)
+  state.desktopFingers = swipe
+  state.desktopMode = nil
+  function state.setDesktopSwipe(mode)
+    if state.desktopFingers == 0 then return "off" end
+    mode = mode == "track" and "track" or "workspace"
+    if state.desktopMode == mode then return "ok" end
+    if state.desktopMode ~= nil then
+      pcall(hl.gesture, { fingers = state.desktopFingers, direction = "horizontal", action = "unset" })
+      state.desktopMode = nil
+    end
+    local action = mode == "track" and tracking("h") or "workspace"
+    local registered, err = pcall(hl.gesture, { fingers = state.desktopFingers, direction = "horizontal", action = action })
+    if not registered then error(state.desktopFingers .. "-finger desktop swipe: " .. tostring(err), 0) end
+    state.desktopMode = mode
+    return "ok"
+  end
   if swipe > 0 then
-    local registered, err = pcall(hl.gesture, { fingers = swipe, direction = "horizontal", action = "workspace" })
+    local registered, err = pcall(state.setDesktopSwipe, options.desktopMode)
     if registered then
       state.gestures[#state.gestures + 1] = { fingers = swipe, direction = "horizontal", action = "unset" }
     else
-      problem(swipe .. "-finger desktop swipe: " .. tostring(err))
+      problem(tostring(err))
     end
   end
 

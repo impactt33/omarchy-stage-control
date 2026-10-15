@@ -109,8 +109,12 @@ Item {
   // A shift on top of where it is, so the slide leaves its place, its
   // hover zoom and its layout animations alone.
   readonly property bool leaving: !!info && info.leaving === true
+  // A window of a desktop beside this one, waiting off the screen's edge
+  // while a swipe peeks at it (Overview, "swiping between desktops").
+  readonly property bool peek: !!info && info.peek === true
   property real slideX: 0
-  transform: Translate { x: tile.slideX }
+  // The swipe moves every tile at once (Overview.trackX).
+  transform: Translate { x: tile.slideX + (tile.overview ? tile.overview.trackX : 0) }
   NumberAnimation {
     id: slideAnimation
     target: tile
@@ -126,8 +130,29 @@ Item {
     slideAnimation.start()
   }
 
+  // Straight to `offset` (a peeking window's place beside the screen),
+  // unless it's on its way somewhere.
+  function placeAt(offset) {
+    if (!slideAnimation.running) slideX = offset
+  }
+
+  // Takes on `shift` of the swipe's, which goes back to 0 at the same
+  // moment, so the window stays where it is on screen. One on its way
+  // somewhere keeps going there.
+  function absorbShift(shift) {
+    if (!slideAnimation.running) {
+      slideX += shift
+      return
+    }
+    var target = slideAnimation.to
+    var left = Math.max(60, slideAnimation.duration * (1 - Math.min(1, slideAnimation.currentTime / Math.max(1, slideAnimation.duration))))
+    slideAnimation.stop()
+    slideX += shift
+    slideTo(target, left)
+  }
+
   // In from `offset`, or, for a window already off its place (on its way
-  // out), from where it is.
+  // out, or waiting beside the screen during a swipe), from where it is.
   function slideIn(offset, duration) {
     if (!slideAnimation.running && Math.abs(slideX) < 0.5) slideX = offset
     slideTo(0, duration)
@@ -136,6 +161,7 @@ Item {
   Component.onCompleted: {
     if (!overview) return
     overview.registerTile(modelData, tile)
+    if (peek) placeAt(info.peekSide * overview.pageShift)
     var offset = overview.takeSlideIn(modelData)
     if (offset !== undefined) slideIn(offset, overview.slideDuration)
   }
@@ -320,7 +346,7 @@ Item {
   MouseArea {
     id: mouse
     anchors.fill: frame
-    enabled: !!tile.service && tile.service.interactive && !tile.dropping && !tile.leaving
+    enabled: !!tile.service && tile.service.interactive && !tile.dropping && !tile.leaving && !tile.peek
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton
     cursorShape: tile.dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor

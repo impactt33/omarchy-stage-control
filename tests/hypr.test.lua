@@ -105,4 +105,23 @@ check(fake.gesture(3, "vertical").action == "workspace", "the user's gesture is 
 check(register({ fingers = 0, desktopSwipe = 0, binds = {} }) == "ok", "cleanup doesn't unset the user's gesture")
 check(fake.gesture(3, "vertical") ~= nil, "user's gesture still there")
 
+-- The desktop swipe swaps between Hyprland's workspace swipe (stage closed)
+-- and the stage's own (open), and starts as asked.
+check(register({ fingers = 0, desktopSwipe = 4, binds = {} }) == "ok", "desktop swipe registers")
+check(fake.gesture(4, "horizontal").action == "workspace", "workspace swipe while closed")
+local state = rawget(_G, "__marcho78_stage_control")
+check(state.setDesktopSwipe("track") == "ok", "switches to the stage")
+check(type(fake.gesture(4, "horizontal").action) == "table", "the stage follows the swipe")
+fake.events = {}
+fake.gesture(4, "horizontal").action.update({ delta = { x = 5, y = 0 }, time_ms = 7, fingers = 4 })
+check(fake.events[1] == "marcho78.stage-control|h|update|5.00|0.00|7.00|4", "sends desktop swipe steps: " .. tostring(fake.events[1]))
+check(state.setDesktopSwipe("track") == "ok", "switching to the same is a no-op")
+check(state.setDesktopSwipe("workspace") == "ok", "and back")
+check(fake.gesture(4, "horizontal").action == "workspace", "workspace swipe again")
+check(register({ fingers = 0, desktopSwipe = 4, desktopMode = "track", binds = {} }) == "ok", "registers already tracking")
+check(type(fake.gesture(4, "horizontal").action) == "table", "starts tracking")
+check(register({ fingers = 0, desktopSwipe = 0, binds = {} }) == "ok", "off")
+check(fake.gesture(4, "horizontal") == nil, "nothing left behind")
+check(rawget(_G, "__marcho78_stage_control").setDesktopSwipe("track") == "off", "nothing to switch when off")
+
 print("hypr: " .. passed .. " checks passed")

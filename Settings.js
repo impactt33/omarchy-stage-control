@@ -192,12 +192,15 @@ function checkBinds(wanted, hyprBinds) {
 
 // Options for hypr/stage.lua. Everything in here is a validated number,
 // boolean, or string from a fixed set, so it can be written out as Lua.
-function hyprOptions(settings, freeBinds) {
+// desktopMode: what the desktop swipe does to begin with, "workspace"
+// (Hyprland's own) or "track" (to the open stage).
+function hyprOptions(settings, freeBinds, desktopMode) {
   var fingers = settings && [3, 4, 5].indexOf(settings.gestureFingers) >= 0 ? settings.gestureFingers : 0
   var swipe = settings && [3, 4, 5].indexOf(settings.desktopSwipeFingers) >= 0 ? settings.desktopSwipeFingers : 0
   return {
     fingers: fingers,
     desktopSwipe: swipe,
+    desktopMode: desktopMode === "track" ? "track" : "workspace",
     binds: (freeBinds || []).filter(function(bind) {
       return EVENTS.indexOf(bind.event) >= 0 && /^[A-Za-z0-9_ +]{1,64}$/.test(bind.keys)
     }).map(function(bind) {
@@ -249,8 +252,20 @@ function hyprRegistration(moduleFile, options) {
   return "return dofile(" + luaString(moduleFile) + ")(" + luaLiteral(options) + ")"
 }
 
+// The code that switches the desktop swipe of a running registration to
+// `mode` ("workspace" or "track"). hyprctl shows only "ok" for whatever it
+// returns, so nothing registered (a config reload cleared it) is an error,
+// "not registered", and the service registers again.
+function desktopSwipeSwitch(mode) {
+  return "local s = rawget(_G, \"__marcho78_stage_control\"); "
+    + "if type(s) == \"table\" and s.setDesktopSwipe then return s.setDesktopSwipe("
+    + luaString(mode === "track" ? "track" : "workspace") + ") end; error(\"not registered\", 0)"
+}
+
 // Parses a custom Hyprland event sent by hypr/stage.lua, e.g.
-// "marcho78.stage-control|g|update|0.00|-12.50|1016.00|4". Returns null for other events.
+// "marcho78.stage-control|g|update|0.00|-12.50|1016.00|4". "g" is the
+// stage's vertical swipe and "h" the desktop swipe on the open stage (axis
+// "y" and "x"). Returns null for other events.
 var EVENT_PREFIX = "marcho78.stage-control|"
 
 function parseEvent(data) {
@@ -258,16 +273,17 @@ function parseEvent(data) {
   // Stage Control's own messages are short; anything long isn't one of them.
   if (text.length > 160 || text.indexOf(EVENT_PREFIX) !== 0) return null
   var parts = text.slice(EVENT_PREFIX.length).split("|")
-  if (parts[0] === "g") {
+  if (parts[0] === "g" || parts[0] === "h") {
+    var axis = parts[0] === "g" ? "y" : "x"
     var phase = parts[1]
     if (phase === "start" || phase === "update") {
       return {
-        type: "gesture", phase: phase,
+        type: "gesture", axis: axis, phase: phase,
         dx: Number(parts[2]) || 0, dy: Number(parts[3]) || 0,
         time: Number(parts[4]) || 0, fingers: Number(parts[5]) || 0
       }
     }
-    if (phase === "finish") return { type: "gesture", phase: "finish", cancelled: parts[2] === "1", time: Number(parts[3]) || 0 }
+    if (phase === "finish") return { type: "gesture", axis: axis, phase: "finish", cancelled: parts[2] === "1", time: Number(parts[3]) || 0 }
     return null
   }
   if (EVENTS.indexOf(parts[0]) >= 0) return { type: "command", command: parts[0] }
