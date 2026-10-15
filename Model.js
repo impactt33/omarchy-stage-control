@@ -154,10 +154,11 @@ function decorFrom(parts) {
 // options in the same batch), so the stage's follows the fingers the same
 // way: `distance` swipe units move a whole desktop, `invert` flips which way
 // is next, a swipe goes on past `cancelRatio` of a desktop, or when its
-// fingers moved at least `minSpeed` units an event on average. Hyprland's
-// defaults where an option is missing.
+// fingers moved at least `minSpeed` units an event on average; with
+// `forever` one swipe can pass more than one desktop. Hyprland's defaults
+// where an option is missing.
 function swipeFrom(parts) {
-  var swipe = { distance: 300, invert: true, cancelRatio: 0.5, minSpeed: 30 }
+  var swipe = { distance: 300, invert: true, cancelRatio: 0.5, minSpeed: 30, forever: false }
   ;(parts || []).forEach(function(part) {
     if (!part || typeof part !== "object" || Array.isArray(part)) return
     if (part.option === "gestures:workspace_swipe_distance") swipe.distance = Math.max(20, Math.min(5000, int(part.int, 300)))
@@ -166,6 +167,7 @@ function swipeFrom(parts) {
       var ratio = Number(part.float)
       swipe.cancelRatio = isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.5
     }
+    else if (part.option === "gestures:workspace_swipe_forever") swipe.forever = part.bool === true || part.int === 1
     else if (part.option === "gestures:workspace_swipe_min_speed_to_force") swipe.minSpeed = Math.max(0, Math.min(1000, int(part.int, 30)))
   })
   return swipe

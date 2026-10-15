@@ -109,8 +109,9 @@ Item {
   // A shift on top of where it is, so the slide leaves its place, its
   // hover zoom and its layout animations alone.
   readonly property bool leaving: !!info && info.leaving === true
-  // A window of a desktop beside this one, waiting off the screen's edge
-  // while a swipe peeks at it (Overview, "swiping between desktops").
+  // A window of another desktop, waiting off the screen's edge for a swipe
+  // (Overview, "swiping between desktops"), with one picture rather than a
+  // live preview.
   readonly property bool peek: !!info && info.peek === true
   property real slideX: 0
   // The swipe moves every tile at once (Overview.trackX).
@@ -132,19 +133,24 @@ Item {
 
   // Straight to `offset` (a peeking window's place beside the screen),
   // unless it's on its way somewhere.
+  // A fresh picture for a waiting window, as a swipe starts.
+  function refreshPreview() {
+    if (capture.captureSource) capture.captureFrame()
+  }
+
   function placeAt(offset) {
     if (!slideAnimation.running) slideX = offset
   }
 
-  // Takes on `shift` of the swipe's, which goes back to 0 at the same
-  // moment, so the window stays where it is on screen. One on its way
-  // somewhere keeps going there.
-  function absorbShift(shift) {
+  // Moves by `shift` while the swipe's own shift (Overview.trackX) moves
+  // back by as much, so the window stays where it is on screen. One on its
+  // way somewhere keeps going there, as far again.
+  function shiftBy(shift) {
     if (!slideAnimation.running) {
       slideX += shift
       return
     }
-    var target = slideAnimation.to
+    var target = slideAnimation.to + shift
     var left = Math.max(60, slideAnimation.duration * (1 - Math.min(1, slideAnimation.currentTime / Math.max(1, slideAnimation.duration))))
     slideAnimation.stop()
     slideX += shift
@@ -161,7 +167,7 @@ Item {
   Component.onCompleted: {
     if (!overview) return
     overview.registerTile(modelData, tile)
-    if (peek) placeAt(info.peekSide * overview.pageShift)
+    if (peek) placeAt(info.peekPage * overview.pageShift)
     var offset = overview.takeSlideIn(modelData)
     if (offset !== undefined) slideIn(offset, overview.slideDuration)
   }
@@ -270,7 +276,9 @@ Item {
       // are the ones with the least time to spare. The window flies with the
       // frame it has and comes alive again when it lands. While the fingers
       // hold the stage, it stays live.
-      live: !!tile.overview && tile.overview.showsHere && !(tile.service && tile.service.animating)
+      // Nor while desktops slide or follow a swipe (Overview.moving).
+      live: !!tile.overview && tile.overview.showsHere && !(tile.service && tile.service.animating) && !tile.overview.moving
+        && !tile.peek
     }
   }
 

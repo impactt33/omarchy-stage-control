@@ -349,4 +349,20 @@ function applyPlan(snap, plan) {
   passed++;
 }
 
+// Hyprland's workspace swipe options, its defaults where one is missing.
+{
+  assert.deepEqual(plain(Model.swipeFrom([])), { distance: 300, invert: true, cancelRatio: 0.5, minSpeed: 30, forever: false });
+  const swipe = plain(Model.swipeFrom([
+    { option: "general:border_size", int: 2 },
+    { option: "gestures:workspace_swipe_distance", int: 500 },
+    { option: "gestures:workspace_swipe_invert", bool: false },
+    { option: "gestures:workspace_swipe_cancel_ratio", float: 0.1 },
+    { option: "gestures:workspace_swipe_min_speed_to_force", int: 0 },
+    { option: "gestures:workspace_swipe_forever", bool: true },
+  ]));
+  assert.deepEqual(swipe, { distance: 500, invert: false, cancelRatio: 0.1, minSpeed: 0, forever: true });
+  assert.equal(Model.swipeFrom([{ option: "gestures:workspace_swipe_distance", int: 0 }]).distance, 20, "never zero");
+  passed++;
+}
+
 console.log(`model: ${passed} checks passed`);

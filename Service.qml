@@ -304,7 +304,8 @@ Item {
     var started = snapRun.start(["/usr/bin/hyprctl", "-j", "--batch",
       "clients; monitors; workspaces; layers; getoption general:border_size; getoption plugin:hyprbars:bar_height; getoption decoration:rounding; "
       + "getoption gestures:workspace_swipe_distance; getoption gestures:workspace_swipe_invert; "
-      + "getoption gestures:workspace_swipe_cancel_ratio; getoption gestures:workspace_swipe_min_speed_to_force"])
+      + "getoption gestures:workspace_swipe_cancel_ratio; getoption gestures:workspace_swipe_min_speed_to_force; "
+      + "getoption gestures:workspace_swipe_forever"])
     if (started) runningRead = ++readsStarted
     else snapPending = true
     if (hasCallback) {
@@ -1057,16 +1058,9 @@ Item {
     var overview = deskOverview
     deskOverview = null
     if (!overview) return
-    var pages = deskTravel / swipeConfig.distance
-    // Like Hyprland: fast enough on average goes on whatever the distance,
-    // else past the cancel ratio does.
-    var speed = deskSteps > 0 ? deskTravel / deskSteps : 0
-    var target = 0
-    if (!event.cancelled) {
-      if (Math.abs(speed) >= swipeConfig.minSpeed && swipeConfig.minSpeed > 0) target = speed > 0 ? 1 : -1
-      else if (Math.abs(pages) > swipeConfig.cancelRatio) target = pages > 0 ? 1 : -1
-    }
-    overview.endPeek(target)
+    // Where the fingers are, and how fast they went on average (Hyprland
+    // decides by that average too); the stage decides where it settles.
+    overview.endPeek(deskTravel / swipeConfig.distance, deskSteps > 0 ? deskTravel / deskSteps : 0, event.cancelled === true)
   }
 
   // ---- hot corners and overlays ----------------------------------------------------------

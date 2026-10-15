@@ -345,7 +345,10 @@ PanelWindow {
     // The desktop on screen changed while the stage is open: slide to it.
     // After a swipe, from where the fingers left everything.
     var active = monitor.activeWorkspace
-    if (peekTarget !== 0 && active === peekTarget) stopPeeking()
+    if (peekTarget !== 0 && active === peekTarget) {
+      rebaseAfterSwipe()
+      slideFromDesktop = active
+    }
     if (mission && slideFromDesktop !== 0 && active !== slideFromDesktop && slideAllowed())
       beginSlide(slideFromDesktop, active, width, data)
     slideFromDesktop = mission ? active : 0
@@ -357,11 +360,21 @@ PanelWindow {
       data[leavingAddress] = leavingData[leavingAddress]
       ids.push(leavingAddress)
     }
-    // While a swipe peeks at the desktops beside this one, their windows
-    // wait off the screen's edges, laid out as they'd be on the stage.
-    if (peeking && mission) {
+    // The other desktops' windows wait off the screen's edges, a page
+    // apart, laid out as they'd be on the stage, for a swipe to bring in
+    // (see "swiping between desktops").
+    if (peeksReady && mission) {
+      var order = service.desktopsFor(screenName).map(function(desktop) { return desktop.id })
+      peekOrder = order
+      peekAt = Math.max(0, order.indexOf(active))
+      var limits = pageLimits()
+      var sides = {}
+      for (var page = limits.low; page <= limits.high; page++) {
+        if (page !== 0 && order[peekAt + page] !== undefined) sides[order[peekAt + page]] = page
+      }
+      peekDesktops = sides
       for (var peekId in peekDesktops) {
-        var peekSide = peekDesktops[peekId]
+        var peekPage = peekDesktops[peekId]
         var peekWindows = Model.desktopWindows(snap, monitor, Number(peekId))
         var peekResult = Layout.spread(peekWindows.map(function(w) {
           var home = Model.monitorById(snap, w.monitor) || monitor
@@ -375,7 +388,7 @@ PanelWindow {
             address: w.address, title: w.title, initialTitle: w.initialTitle, cls: w.cls, icon: app.icon, appName: app.name,
             from: to, to: to, size: { w: w.w, h: w.h }, onScreen: false, minimized: false,
             workspace: w.workspace, z: (w.floating ? 200 : 0) + (peekWindows.length - index),
-            peek: true, peekSide: peekSide
+            peek: true, peekPage: peekPage
           }
           ids.push(w.address)
         })
@@ -415,8 +428,7 @@ PanelWindow {
   // App names under grouped windows ride in with them.
   property real groupSlideX: 0
   readonly property int baseSlideDuration: Math.round(440 / (service ? service.speedFactor : 1))
-  property int slideDuration: baseSlideDuration
-  property int nextSlideDuration: 0
+  readonly property int slideDuration: baseSlideDuration
   // How far a desktop slides: the screen's width and a gap.
   readonly property real pageShift: stageWidth + 40
 
@@ -428,13 +440,6 @@ PanelWindow {
   }
 
   function beginSlide(fromDesktop, toDesktop, distance, newData) {
-    // A swipe that let go sets how long the rest of the way takes.
-    if (nextSlideDuration > 0) {
-      slideDuration = nextSlideDuration
-      nextSlideDuration = 0
-    } else {
-      slideDuration = baseSlideDuration
-    }
     // Toward a desktop to the right, everything moves left, and back.
     var order = service.desktopsFor(screenName).map(function(desktop) { return desktop.id })
     var a = order.indexOf(fromDesktop), b = order.indexOf(toDesktop)
@@ -447,7 +452,7 @@ PanelWindow {
     var leaving = {}
     tileIds.forEach(function(address) {
       var info = tileData[address]
-      if (!info || info.minimized || newData[address]) return
+      if (!info || info.minimized || info.peek || newData[address]) return
       if (leavingData[address]) {
         leaving[address] = leavingData[address]
         return
@@ -465,6 +470,13 @@ PanelWindow {
       if (tileData[address] && !leavingData[address] && !tileData[address].peek) return
       pending[address] = direction * shift
     })
+    // Windows that waited off screen for a swipe come in from the edge, not
+    // from as many pages away as their desktop was.
+    for (var waiting in pending) {
+      var info = tileData[waiting]
+      var tile = tileItems[waiting]
+      if (info && info.peek && tile) tile.placeAt(direction * shift)
+    }
     leavingData = leaving
     pendingSlideIns = pending
     hoverAddress = ""
@@ -509,115 +521,199 @@ PanelWindow {
   // ---- swiping between desktops ------------------------------------------------------
   //
   // The desktop swipe on the open stage (Service, "swiping between
-  // desktops"): beginPeek() lays out the desktops on either side off the
-  // screen's edges; peekTo() moves everything with the fingers (trackX, a
-  // shift every tile adds to its own); endPeek() goes back, or goes to the
-  // desktop beside: each tile takes over its share of the shift, Hyprland
-  // switches desktops, and the slide above carries on from there.
+  // desktops"). The stage's desktops sit side by side, a page (pageShift)
+  // apart, and move together with the fingers: trackX, a shift every tile
+  // adds to its own. beginPeek() lays out the desktops beside this one off
+  // the screen's edges, and peekTo() more of them as the fingers go on (as
+  // far as Hyprland's workspace_swipe_forever lets its own swipe go).
+  // endPeek() settles on a desktop, or back on this one, by the rules of
+  // Hyprland's swipe, and slides there at once.
+  //
+  // Hyprland is told to go there only once the stage has: switching, it
+  // animates its own workspaces under the stage, which costs frames, and the
+  // stage would wait on it. Then the stage takes the new desktop as its own
+  // (rebaseAfterSwipe), with nothing moving on screen.
 
   property bool peeking: false
-  // Desktop id: the side it waits on, -1 (previous) or 1 (next).
+  // Desktop id: its place, in pages from this desktop (..., -1, 1, 2, ...).
+  // Kept by rebuild() once peeksReady.
   property var peekDesktops: ({})
+  property var peekOrder: []
+  property int peekAt: 0
   property real trackX: 0
   property real peekPages: 0
-  // The desktop a swipe let go toward, until Hyprland is there.
+  // Where the swipe settles, in pages; and the desktop there, once the
+  // stage is there and Hyprland is going.
+  property int peekTargetPage: 0
   property int peekTarget: 0
+  // Anything sliding: the windows' live previews wait meanwhile
+  // (WindowTile), as they do while the stage opens.
+  readonly property bool moving: peeking || peekAnimation.running || slideEndTimer.running
+
+  // The other desktops' windows are laid out once the stage has opened and
+  // settled, off screen with one picture each (WindowTile.peek), so a swipe
+  // only has to move them: made as the fingers reached them, they cost the
+  // swipe a frame or two each time. They're drawn where they wait, out of
+  // sight, rather than hidden: hidden, a window drew its preview for the
+  // first time on the first frame of the swipe, which held that frame up.
+  property bool peeksReady: false
+  Timer {
+    interval: 250
+    running: win.showsHere && win.mission && win.settled && !win.peeksReady
+    onTriggered: {
+      win.peeksReady = true
+      win.rebuild()
+    }
+  }
 
   function beginPeek() {
-    if (!mission || !monitor || peekTarget !== 0 || !slideAllowed()) return false
-    var order = service.desktopsFor(screenName).map(function(desktop) { return desktop.id })
-    var at = order.indexOf(monitor.activeWorkspace)
-    if (at < 0) return false
-    var sides = {}
-    if (at > 0) sides[order[at - 1]] = -1
-    if (at < order.length - 1) sides[order[at + 1]] = 1
-    peekAnimation.stop()
-    peekDesktops = sides
+    if (!mission || !monitor || peekTarget !== 0 || peekAnimation.running || !slideAllowed()) return false
+    if (!peeksReady) {
+      peeksReady = true
+      rebuild()
+    }
+    if (peekOrder.indexOf(monitor.activeWorkspace) < 0) return false
     peeking = true
     peekPages = 0
+    peekTargetPage = 0
     trackX = 0
     hoverAddress = ""
     selectedAddress = ""
-    rebuild()
-    // Tiles that were already there (one still sliding from a switch) wait
-    // on their side too.
+    // Each waits a page per desktop away. (Its picture is from when the
+    // stage last stood still: new pictures for them all at once, here, cost
+    // the swipe its first frame.)
+    refreshQueue = []
     for (var address in tileData) {
       var info = tileData[address]
       var tile = tileItems[address]
-      if (info.peek && tile) tile.placeAt(info.peekSide * pageShift)
+      if (info.peek && tile) tile.placeAt(info.peekPage * pageShift)
     }
     return true
   }
 
-  function hasSide(side) {
-    for (var id in peekDesktops) if (peekDesktops[id] === side) return true
-    return false
+  // The pages the swipe can reach: to either end, or one either way when
+  // Hyprland's own swipe stops at one.
+  function pageLimits() {
+    var low = -peekAt, high = peekOrder.length - 1 - peekAt
+    if (!(service && service.swipeConfig.forever)) {
+      low = Math.max(low, -1)
+      high = Math.min(high, 1)
+    }
+    return { low: low, high: high }
   }
 
   // `pages`: how far the fingers have gone, in desktops, toward the next.
-  // Where there's no desktop to go to, the stage gives a little and holds.
+  // Past the last desktop the stage gives a little and holds.
   function peekTo(pages) {
-    if (!peeking || peekTarget !== 0) return
-    var side = pages > 0 ? 1 : -1
-    var shown = hasSide(side) ? Math.max(-1, Math.min(1, pages))
-      : side * 0.12 * (1 - 1 / (1 + Math.abs(pages) * 4))
+    if (!peeking || peekTarget !== 0 || peekAnimation.running) return
+    var limits = pageLimits()
+    var shown = pages > limits.high ? limits.high + 0.12 * (1 - 1 / (1 + (pages - limits.high) * 4))
+      : pages < limits.low ? limits.low - 0.12 * (1 - 1 / (1 + (limits.low - pages) * 4))
+      : pages
     peekPages = shown
     trackX = -shown * pageShift
   }
 
-  // target: 0 to come back, 1 or -1 to go to the next or previous desktop.
-  function endPeek(target) {
-    if (!peeking || peekTarget !== 0) return
-    if (target !== 0 && !hasSide(target)) target = 0
-    var left = Math.max(0.3, 1 - Math.abs(peekPages) * (target === 0 ? 0 : 1))
-    if (target === 0) {
-      peekAnimation.stop()
-      peekAnimation.duration = Math.round(baseSlideDuration * Math.max(0.35, Math.abs(peekPages)))
-      peekAnimation.start()
-      return
+  // Where the fingers let go (`pages`), their average speed per step toward
+  // the next desktop (`speed`), and whether Hyprland called the swipe off.
+  // Like Hyprland: from the last desktop passed, fast enough goes on to the
+  // next, else past the cancel ratio does, else it stays.
+  function endPeek(pages, speed, cancelled) {
+    if (!peeking || peekTarget !== 0 || peekAnimation.running) return
+    var limits = pageLimits()
+    var at = Math.max(limits.low, Math.min(limits.high, pages))
+    var passed = at >= 0 ? Math.floor(at) : Math.ceil(at)
+    var part = at - passed
+    var config = service.swipeConfig
+    var page = passed
+    if (cancelled) page = 0
+    else if (config.minSpeed > 0 && Math.abs(speed) >= config.minSpeed) {
+      if (part === 0 || (part > 0) === (speed > 0)) page = passed + (speed > 0 ? 1 : -1)
+    } else if (Math.abs(part) > config.cancelRatio) {
+      page = passed + (part > 0 ? 1 : -1)
     }
-    var toDesktop = 0
-    for (var id in peekDesktops) if (peekDesktops[id] === target) toDesktop = Number(id)
-    // Each tile keeps where the fingers left it, and the switch's slide
-    // (beginSlide) takes it the rest of the way.
-    for (var address in tileItems) tileItems[address].absorbShift(trackX)
-    trackX = 0
-    peekTarget = toDesktop
-    nextSlideDuration = Math.round(baseSlideDuration * left)
-    peekGiveUp.restart()
-    service.focusDesktop(toDesktop)
+    page = Math.max(limits.low, Math.min(limits.high, page))
+    slideToPage(page)
   }
 
-  // The peek is over: the desktops beside go (the next rebuild leaves them
-  // out). Not their tiles' shifts: the switch's slide still needs them.
+  // Slides to `page`, as long as the part of a page left would take.
+  function slideToPage(page) {
+    peekTargetPage = page
+    peekAnimation.stop()
+    peekAnimation.to = -page * pageShift
+    peekAnimation.duration = Math.round(baseSlideDuration * Math.max(0.3, Math.min(1, Math.abs(trackX / pageShift + page))))
+    peekAnimation.start()
+  }
+
+  // Settled. Back here, the desktops beside go; elsewhere, Hyprland goes too.
+  function peekSettled() {
+    peekPages = -trackX / pageShift
+    if (peekTargetPage === 0) {
+      stopPeeking()
+      trackX = 0
+      rebuild()
+      refreshPeeks()
+      return
+    }
+    peekTarget = peekOrder[peekAt + peekTargetPage]
+    peekGiveUp.restart()
+    service.focusDesktop(peekTarget)
+  }
+
+  // Hyprland is on the desktop the stage slid to: it becomes the stage's
+  // own. Every tile takes the swipe's shift less a page per page gone, and
+  // the swipe's shift goes to 0, so nothing moves on screen; the desktops
+  // left behind are off screen and simply go.
+  function rebaseAfterSwipe() {
+    var shift = peekTargetPage * pageShift
+    for (var address in tileItems) tileItems[address].shiftBy(-shift)
+    trackX += shift
+    stopPeeking()
+    Qt.callLater(refreshPeeks)
+  }
+
+  // New pictures for the waiting windows while the stage stands still, one
+  // window every few frames, so the next swipe shows them as they are.
+  property var refreshQueue: []
+  function refreshPeeks() {
+    var queue = []
+    for (var address in tileData) if (tileData[address].peek) queue.push(address)
+    refreshQueue = queue
+  }
+  Timer {
+    interval: 40
+    repeat: true
+    running: win.refreshQueue.length > 0 && !win.moving
+    onTriggered: {
+      var queue = win.refreshQueue.slice()
+      var tile = win.tileItems[queue.shift()]
+      win.refreshQueue = queue
+      if (tile && tile.peek) tile.refreshPreview()
+    }
+  }
+
   function stopPeeking() {
     peekGiveUp.stop()
     peeking = false
-    peekDesktops = ({})
     peekTarget = 0
+    peekTargetPage = 0
   }
 
   function resetPeek() {
     peekAnimation.stop()
     stopPeeking()
+    peeksReady = false
+    peekDesktops = ({})
     trackX = 0
     peekPages = 0
-    nextSlideDuration = 0
   }
 
-  // Coming back: everything slides home, then the desktops beside go.
   NumberAnimation {
     id: peekAnimation
     target: win
     property: "trackX"
-    to: 0
     easing.type: Easing.OutCubic
-    onFinished: {
-      win.peekPages = 0
-      if (win.peekTarget !== 0) return
-      win.stopPeeking()
-      win.rebuild()
-    }
+    onFinished: if (win.peeking) win.peekSettled()
   }
 
   // Hyprland never went to the desktop (it's gone, say): back home.
@@ -625,10 +721,8 @@ PanelWindow {
     id: peekGiveUp
     interval: 1500
     onTriggered: {
-      win.stopPeeking()
-      win.nextSlideDuration = 0
-      for (var address in win.tileItems) win.tileItems[address].slideTo(0, win.baseSlideDuration)
-      win.rebuild()
+      win.peekTarget = 0
+      win.slideToPage(0)
     }
   }
 
@@ -782,10 +876,17 @@ PanelWindow {
 
   // ---- keyboard ---------------------------------------------------------------------------
 
+  // The windows the keyboard can pick: those placed on the stage, not ones
+  // sliding away or waiting off screen for a swipe.
+  function pickable() {
+    return tileIds.filter(function(address) { return !!placed[address] })
+  }
+
   function step(direction) {
     var from = selectedAddress || hoverAddress
     if (!from || !placed[from]) {
-      selectedAddress = tileIds.length ? tileIds[0] : ""
+      var ids = pickable()
+      selectedAddress = ids.length ? ids[0] : ""
       return
     }
     var next = Layout.neighbor(placed, from, direction)
@@ -793,8 +894,9 @@ PanelWindow {
   }
 
   function cycle(forward) {
-    if (tileIds.length === 0) return
-    var ordered = tileIds.slice().sort(function(a, b) {
+    var ordered = pickable()
+    if (ordered.length === 0) return
+    ordered.sort(function(a, b) {
       var ra = placed[a], rb = placed[b]
       return Math.abs(ra.y - rb.y) > 20 ? ra.y - rb.y : ra.x - rb.x
     })
