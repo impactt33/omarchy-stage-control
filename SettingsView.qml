@@ -723,11 +723,11 @@ Item {
 
         SectionLabel { text: "Glass"; topPadding: 0 }
         ButtonGroup {
-          options: [{ value: "liquid", label: "Liquid" }, { value: "frosted", label: "Frosted" }, { value: "solid", label: "Solid" }]
+          options: [{ value: "liquid", label: "Liquid" }, { value: "frosted", label: "Frosted" }, { value: "solid", label: "Solid" }, { value: "theme", label: "Theme" }]
           value: root.settings.glass || "liquid"
           onChanged: function(v) { root.set("glass", v) }
         }
-        Caption { text: "Liquid bends the wallpaper at the edges like macOS Tahoe; Frosted blurs more; Solid is plain and lightest on the GPU." }
+        Caption { text: "Liquid bends the wallpaper at the edges like macOS Tahoe; Frosted blurs more; Solid is plain and lightest on the GPU. Theme turns the glass off and takes the colors and borders of your Omarchy theme's menus and popups." }
 
         SectionLabel { text: "Background" }
         ButtonGroup {

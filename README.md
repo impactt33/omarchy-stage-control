@@ -164,7 +164,7 @@ out of the bar, so your settings go with it.
 | `showMinimized` | `true` | minimized windows in App Exposé |
 | `background` | `blur` | `blur`, `dim` |
 | `dim` | `25` | 0–80 (%) |
-| `glass` | `liquid` | `liquid`, `frosted`, `solid` |
+| `glass` | `liquid` | `liquid`, `frosted`, `solid`, `theme` (no glass: the Omarchy theme's popup colors and borders) |
 | `highlight` | `accent` | `accent` (your theme's), `blue`, `purple`, `pink`, `red`, `orange`, `yellow`, `green`, `graphite`, or `#rrggbb` |
 | `reduceMotion` | `false` | fade instead of flying windows |
 | `speed` | `100` | 50–200 (%) |

@@ -75,7 +75,7 @@ var SCHEMA = {
     windowTitles: ["hover", "always", "never"],
     spacesBar: ["auto", "expanded", "thumbnails"],
     background: ["blur", "dim"],
-    glass: ["liquid", "frosted", "solid"],
+    glass: ["liquid", "frosted", "solid", "theme"],
     highlight: ["accent", "blue", "purple", "pink", "red", "orange", "yellow", "green", "graphite"]
   },
   ranges: {

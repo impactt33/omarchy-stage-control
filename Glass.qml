@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Effects
+import qs.Commons
 
 // A Liquid Glass pane. Given the layer behind it (`backdrop`: a texture of
 // the whole window with `backdropIsWindow`, else one that covers
@@ -9,7 +10,11 @@ import QtQuick.Effects
 // shader can't load, it draws a flat translucent pane with the same rim.
 // Content goes inside, as children.
 //
-// style: "liquid" (clear glass), "frosted" (more blur and tint), or "solid".
+// style: "liquid" (clear glass), "frosted" (more blur and tint), "solid", or
+// "theme": no lens, rim or border, but the blurred backdrop under the Omarchy
+// theme's own tint, the one its popups use (shell.toml's [popups]), with the
+// menu's highlight ([menu]) on hover: frosted panes like the theme's bar and
+// menus.
 Item {
   id: glass
 
@@ -33,6 +38,7 @@ Item {
   // follow the pane around on every frame.
   property bool backdropIsWindow: false
 
+  readonly property bool themed: style === "theme"
   readonly property bool refracting: style !== "solid" && !!backdrop && (backdropIsWindow || !!backdropSpace)
     && lens.status !== ShaderEffect.Error
 
@@ -44,7 +50,7 @@ Item {
     offset: Qt.vector2d(0, 4)
     blur: 18
     spread: -2
-    color: Qt.rgba(0, 0, 0, glass.style === "solid" ? 0.35 : 0.24)
+    color: Qt.rgba(0, 0, 0, glass.style === "solid" || glass.themed ? 0.35 : 0.24)
     visible: glass.shadow && glass.opacity > 0
   }
 
@@ -56,19 +62,24 @@ Item {
     property var backdrop: glass.backdrop
     property size itemSize: Qt.size(width, height)
     property real radius: glass.radius
-    property real bevel: Math.max(4, Math.min(width, height) * 0.34)
-    property real refraction: glass.style === "liquid" ? Math.min(12, Math.min(width, height) * 0.24) : 4
+    // The theme's panes only blur: no bending rim and no light on it.
+    property real bevel: glass.themed ? 0.001 : Math.max(4, Math.min(width, height) * 0.34)
+    property real refraction: glass.themed ? 0 : glass.style === "liquid" ? Math.min(12, Math.min(width, height) * 0.24) : 4
     property real frost: glass.style === "liquid" ? 1.6 : 3.2
-    property real rim: glass.style === "liquid" ? 1.0 : 0.7
+    property real rim: glass.themed ? 0 : glass.style === "liquid" ? 1.0 : 0.7
     property real flip: 0
     property real windowSpace: glass.backdropIsWindow ? 1 : 0
     property vector4d area: Qt.vector4d(0, 0, 1, 1)
-    property vector4d tint: glass.dark
+    property vector4d tint: glass.themed
+      ? Qt.vector4d(Color.popups.background.r, Color.popups.background.g, Color.popups.background.b, Color.popups.background.a)
+      : glass.dark
       ? Qt.vector4d(0.05, 0.05, 0.07, glass.style === "liquid" ? 0.32 : 0.46)
       : Qt.vector4d(1, 1, 1, glass.style === "liquid" ? 0.30 : 0.50)
     property vector4d fill: glass.selected ? Qt.vector4d(glass.selectedColor.r, glass.selectedColor.g, glass.selectedColor.b, glass.selectedStrength)
       : glass.pressed ? Qt.vector4d(0, 0, 0, 0.16)
-      : glass.hovered ? Qt.vector4d(1, 1, 1, 0.12)
+      : glass.hovered ? (glass.themed
+        ? Qt.vector4d(Color.menu.selectedBackground.r, Color.menu.selectedBackground.g, Color.menu.selectedBackground.b, Color.menu.selectedBackground.a)
+        : Qt.vector4d(1, 1, 1, 0.12))
       : Qt.vector4d(0, 0, 0, 0)
 
     fragmentShader: Qt.resolvedUrl("shaders/glass.frag.qsb")
@@ -123,11 +134,30 @@ Item {
       lens.area = next
   }
 
+  // The theme's pane when there is no backdrop to blur: its tint alone.
+  Item {
+    anchors.fill: parent
+    visible: glass.themed && !glass.refracting
+
+    Rectangle {
+      anchors.fill: parent
+      radius: glass.radius
+      color: glass.selected ? Qt.rgba(glass.selectedColor.r, glass.selectedColor.g, glass.selectedColor.b, glass.selectedStrength)
+        : Color.popups.background
+    }
+    Rectangle {
+      anchors.fill: parent
+      radius: glass.radius
+      color: glass.pressed ? Qt.rgba(0, 0, 0, 0.16) : Color.menu.selectedBackground
+      visible: glass.pressed || (glass.hovered && !glass.selected)
+    }
+  }
+
   // The drawn pane, for when there is nothing to refract.
   Item {
     id: drawn
     anchors.fill: parent
-    visible: !glass.refracting
+    visible: !glass.refracting && !glass.themed
 
     readonly property real bodyAlpha: glass.style === "solid" ? 0.92 : glass.style === "frosted" ? 0.30 : 0.18
     readonly property color baseColor: glass.dark ? Qt.rgba(0.14, 0.14, 0.16, 1) : Qt.rgba(0.97, 0.97, 0.98, 1)
@@ -183,7 +213,8 @@ Item {
     color: "transparent"
     border.width: glass.outlineWidth
     border.color: glass.outlineColor
-    visible: glass.outlineWidth > 0
+    // The theme's panes have no borders, a selected one included.
+    visible: glass.outlineWidth > 0 && !glass.themed
   }
 
   Item {
